@@ -1,0 +1,97 @@
+params:
+  seed: ${...seed}
+  algo:
+    name: sac
+
+  model:
+    name: soft_actor_critic
+
+  network:
+    name: soft_actor_critic
+    separate: True
+
+    space:
+      continuous:
+        mu_activation: None
+        sigma_activation: None
+        mu_init:
+          name: default
+        sigma_init:
+          name: const_initializer
+          val: 0
+        fixed_sigma: True
+    mlp:
+      units: [256, 256, 256] #[512, 256, 128] #256, 256, 256 // 256, 128, 64
+      activation: relu
+      d2rl: False
+
+      initializer:
+        name: default
+      regularizer:
+        name: None
+    log_std_bounds: [-20, 2]
+
+  load_checkpoint: ${if:${...checkpoint},True,False}
+  load_path: ${...checkpoint}
+
+  config:
+    name: ${resolve_default:UR10Reacher,${....experiment}}
+    full_experiment_name: ${.name}
+    device: ${....rl_device}
+    device_name: ${....rl_device}
+    env_name: rlgpu
+    ppo: False
+    multi_gpu: False
+    mixed_precision: False
+    normalize_input: True
+    normalize_value: True
+    value_bootstrap: True
+    num_actors: ${....task.env.numEnvs}
+    reward_shaper:
+      scale_value: 0.01
+    normalize_advantage: True
+    #gamma: ${....sweep_config.parameters.gamma}
+    #tau: ${....sweep_config.parameters.tau}
+    #init_alpha: ${....train.config.batch_size}
+    #alpha_lr: ${....sweep_config.parameters.alpha_lr}
+    #actor_lr: ${....sweep_config.parameters.actor_lr}
+    #critic_lr: ${....sweep_config.parameters.critic_lr}
+    #critic_tau: ${....sweep_config.parameters.critic_tau}
+    #batch_size: ${....sweep_config.parameters.batch_size}
+    gamma: 0.99 # 0.99
+    tau: 0.003 #0.95, 0.001, 0.005, 0.003
+    init_alpha: 1.0
+    alpha_lr: 0.001 #0.001, 0.0001, 0.02
+    actor_lr: 0.0001 #0.0003, 0.0001
+    critic_lr: 0.0001 #0.001
+    critic_tau: 0.005 #0.01, 0.005
+    batch_size: 512
+    learning_rate: 0.001 # 0.003 5e-3
+    lr_schedule: adaptive
+    schedule_type: standard
+    kl_threshold: 0.007 #0.008, 0.009, 0.007
+    score_to_win: 10000
+    max_epochs: ${resolve_default:5000,${....max_iterations}}
+    save_best_after: 1000
+    save_frequency: 200
+    print_stats: True
+    grad_norm: 1.0
+    entropy_coef: 0.002 #0.002, 0.0, 1.5, 0.005
+    truncate_grads: True
+    e_clip: 0.2
+    horizon_length: 64
+    minibatch_size: 32768
+    mini_epochs: 5
+    critic_coef: 4
+    clip_value: True
+    seq_len: 4
+    learnable_temperature: True
+    bounds_loss_coef: 0.001
+    num_seed_steps: 1000
+    num_warmup_steps: 10000
+    replay_buffer_size: 1500000
+
+    player:
+      deterministic: True
+      games_num: 100000
+      print_stats: True

@@ -1,0 +1,76 @@
+params:
+  seed: ${...seed}
+  algo:
+    name: sac
+
+  model:
+    name: soft_actor_critic
+
+  network:
+    name: soft_actor_critic
+    separate: True
+
+    space:
+      continuous:
+        
+    mlp:
+      units: [512, 256, 128] #256, 256, 256 // 256, 128, 64
+      activation: relu
+      d2rl: False
+
+      initializer:
+        name: default
+    log_std_bounds: [-20, 2]
+
+  load_checkpoint: ${if:${...checkpoint},True,False}
+  load_path: ${...checkpoint}
+
+  config:
+    name: ${resolve_default:UR10Reacher,${....experiment}}
+    device: ${....rl_device}
+    device_name: ${....rl_device}
+    env_name: rlgpu
+    multi_gpu: ${....multi_gpu}
+    normalize_input: True
+    normalize_value: True
+    value_bootstrap: True
+    num_actors: ${....task.env.numEnvs}
+    reward_shaper:
+      scale_value: 0.01
+    gamma: 0.99
+    init_alpha: 1.0
+    alpha_lr: 0.001
+    actor_lr: 0.0001
+    critic_lr: 0.0001
+    critic_tau: 0.01
+    batch_size: 1024
+    tau: 0.99
+    learning_rate: 0.0001
+    lr_schedule: adaptive
+    schedule_type: standard
+    kl_threshold: 0.008
+    score_to_win: 1000
+    max_epochs: ${resolve_default:50,${....max_iterations}}
+    save_best_after: 100
+    save_frequency: 1000
+    print_stats: True
+    grad_norm: 1.0
+    entropy_coef: 0.0
+    truncate_grads: True
+    e_clip: 0.2
+    horizon_length: 64
+    minibatch_size: 32768
+    mini_epochs: 5
+    critic_coef: 4
+    clip_value: True
+    seq_len: 4
+    bounds_loss_coef: 0.0001
+    learnable_temperature: true
+    num_seed_steps: 1000
+    num_warmup_steps: 1000
+    replay_buffer_size: 2000000
+
+    player:
+      deterministic: True
+      games_num: 100000
+      print_stats: True
