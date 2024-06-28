@@ -543,46 +543,12 @@ def randomize_rotation(rand0, rand1, x_unit_tensor, y_unit_tensor):
 @torch.jit.script
 def compute_arm_reward(
     rew_buf, reset_buf, reset_goal_buf, progress_buf, successes, consecutive_successes,
-    max_episode_length: float, object_pos, object_rot, goal_pos, goal_rot, place_pos, place_rot,
+    max_episode_length: float, object_pos: torch.Tensor, object_rot: torch.Tensor, goal_pos: torch.Tensor, goal_rot: torch.Tensor, place_pos: torch.Tensor, place_rot: torch.Tensor,
     dist_reward_scale: float, rot_reward_scale: float, rot_eps: float,
-    actions, action_penalty_scale: float,
+    actions: torch.Tensor, action_penalty_scale: float,
     success_tolerance: float, reach_goal_bonus: float, fall_dist: float,
-    fall_penalty: float, max_consecutive_successes: int, av_factor: float, gripper_position
+    fall_penalty: float, max_consecutive_successes: int, av_factor: float, gripper_position: torch.Tensor
 ):
-    """
-    Compute the reward for the robotic arm in the current simulation step.
-
-    Args:
-        rew_buf (torch.Tensor): Buffer to store the rewards.
-        reset_buf (torch.Tensor): Buffer indicating which environments need a reset.
-        reset_goal_buf (torch.Tensor): Buffer indicating which goals need resetting.
-        progress_buf (torch.Tensor): Buffer tracking the progress of each environment.
-        successes (torch.Tensor): Buffer tracking the number of successes.
-        consecutive_successes (torch.Tensor): Buffer tracking consecutive successes.
-        max_episode_length (float): Maximum length of an episode.
-        object_pos (torch.Tensor): Positions of the objects.
-        object_rot (torch.Tensor): Rotations of the objects.
-        goal_pos (torch.Tensor): Positions of the goal objects.
-        goal_rot (torch.Tensor): Rotations of the goal objects.
-        place_pos (torch.Tensor): Target positions where the objects should be placed.
-        place_rot (torch.Tensor): Target rotations where the objects should be placed.
-        dist_reward_scale (float): Scaling factor for distance reward.
-        rot_reward_scale (float): Scaling factor for rotation reward.
-        rot_eps (float): Small value to avoid division by zero in rotation calculations.
-        actions (torch.Tensor): Actions taken by the robotic arm.
-        action_penalty_scale (float): Scaling factor for action penalty.
-        success_tolerance (float): Distance threshold for considering the task a success.
-        reach_goal_bonus (float): Bonus reward for reaching the goal.
-        fall_dist (float): Distance threshold for considering the object has fallen.
-        fall_penalty (float): Penalty for the object falling.
-        max_consecutive_successes (int): Maximum number of consecutive successes allowed.
-        av_factor (float): Averaging factor for calculating consecutive successes.
-        gripper_position (torch.Tensor): Positions of the gripper.
-
-    Returns:
-        tuple: A tuple containing updated rewards, resets, goal resets, progress buffer, successes, and consecutive successes.
-    """
-
     # Compute the distance between the object and the place position
     place_dist = torch.norm(goal_pos - object_pos, p=2, dim=-1)
     
@@ -625,8 +591,8 @@ def compute_arm_reward(
     finished_cons_successes = torch.sum(successes * resets.float())
     cons_successes = torch.where(
         num_resets > 0, 
-        av_factor * finished_cons_successes / num_resets + (1.0 - av_factor) * consecutive_successes.mean(), 
-        consecutive_successes.mean()
+        av_factor*finished_cons_successes/num_resets + (1.0 - av_factor)*
+        consecutive_successes, consecutive_successes
     )
 
     # Update the consecutive successes for environments that did not reset
