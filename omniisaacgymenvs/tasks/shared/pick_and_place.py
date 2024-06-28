@@ -395,15 +395,29 @@ class PickAndPlaceTask(RLTask):
             joint_indices=self.actuated_dof_indices
         )
 
-        if self._task_cfg['sim2real']['enabled'] and self.test and self.num_envs == 1:
-            cur_joint_pos = self._arms.get_joint_positions(
-                indices=[0], joint_indices=self.actuated_dof_indices
-            )
-            joint_pos = cur_joint_pos[0]
-            if torch.any(joint_pos < self.arm_dof_lower_limits) or torch.any(joint_pos > self.arm_dof_upper_limits):
-                print("get_joint_positions out of bound, send_joint_pos skipped")
-            else:
-                self.send_joint_pos(joint_pos)
+    gripper_pos = self.get_gripper_position()
+    for i in range(self.num_envs):
+        if torch.norm(gripper_pos[i] - self.object_pos[i]) < 0.05:  # If gripper is near the object
+            self.close_gripper()
+            print(f"Environment {i}: Object reached. Closing gripper.")
+
+        if self.check_gripper_holding(gripper_pos[i], self.object_pos[i]):
+            print(f"Environment {i}: Object successfully grasped.")
+
+        if torch.norm(self.object_pos[i] - self.place_pos[i]) < self.success_tolerance and \
+           torch.norm(self.object_rot[i] - self.place_rot[i]) < self.rot_eps:
+            self.open_gripper()
+            print(f"Environment {i}: Object placed successfully.")
+
+    if self._task_cfg['sim2real']['enabled'] and self.test and self.num_envs == 1:
+        cur_joint_pos = self._arms.get_joint_positions(
+            indices=[0], joint_indices=self.actuated_dof_indices
+        )
+        joint_pos = cur_joint_pos[0]
+        if torch.any(joint_pos < self.arm_dof_lower_limits) or torch.any(joint_pos > self.arm_dof_upper_limits):
+            print("get_joint_positions out of bound, send_joint_pos skipped")
+        else:
+            self.send_joint_pos(joint_pos)
 
     def is_done(self):
         """
@@ -529,7 +543,7 @@ def randomize_rotation(rand0, rand1, x_unit_tensor, y_unit_tensor):
 @torch.jit.script
 def compute_arm_reward(
     rew_buf, reset_buf, reset_goal_buf, progress_buf, successes, consecutive_successes,
-    max_episode_length: float, object_pos, object_rot, place_pos, place_rot,
+    max_episode_length: float, object_pos, object_rot, goal_pos, goal_rot, place_pos, place_rot,
     dist_reward_scale: float, rot_reward_scale: float, rot_eps: float,
     actions, action_penalty_scale: float,
     success_tolerance: float, reach_goal_bonus: float, fall_dist: float,
@@ -548,6 +562,8 @@ def compute_arm_reward(
         max_episode_length (float): Maximum length of an episode.
         object_pos (torch.Tensor): Positions of the objects.
         object_rot (torch.Tensor): Rotations of the objects.
+        goal_pos (torch.Tensor): Positions of the goal objects.
+        goal_rot (torch.Tensor): Rotations of the goal objects.
         place_pos (torch.Tensor): Target positions where the objects should be placed.
         place_rot (torch.Tensor): Target rotations where the objects should be placed.
         dist_reward_scale (float): Scaling factor for distance reward.
@@ -565,18 +581,20 @@ def compute_arm_reward(
 
     Returns:
         tuple: A tuple containing updated rewards, resets, goal resets, progress buffer, successes, and consecutive successes.
-
     """
 
     # Compute the distance between the object and the place position
-    place_dist = torch.norm(object_pos - place_pos, p=2, dim=-1)
+    place_dist = torch.norm(goal_pos - object_pos, p=2, dim=-1)
+    
+    # Compute the distance between the goal object and the place object
+    goal_place_dist = torch.norm(goal_pos - place_pos, p=2, dim=-1)
     
     # Compute the rotation difference between the object and the place rotation
     quat_diff = quat_mul(object_rot, quat_conjugate(place_rot))
     rot_dist = 2.0 * torch.asin(torch.clamp(torch.norm(quat_diff[:, 1:4], p=2, dim=-1), max=1.0))
 
     # Initialize the reward based on these distances
-    reward = -place_dist * dist_reward_scale - rot_dist * rot_reward_scale
+    reward = -place_dist * dist_reward_scale - goal_place_dist * dist_reward_scale - rot_dist * rot_reward_scale
     
     # Apply scaling to the distance reward and add penalties for actions taken
     action_penalty = torch.sum(actions ** 2, dim=-1) * action_penalty_scale
@@ -607,11 +625,11 @@ def compute_arm_reward(
     finished_cons_successes = torch.sum(successes * resets.float())
     cons_successes = torch.where(
         num_resets > 0, 
-        av_factor * finished_cons_successes / num_resets + (1.0 - av_factor) * consecutive_successes, 
-        consecutive_successes
+        av_factor * finished_cons_successes / num_resets + (1.0 - av_factor) * consecutive_successes.mean(), 
+        consecutive_successes.mean()
     )
 
-    # Reset consecutive successes if the maximum allowed is reached
-    cons_successes = torch.where(cons_successes >= max_consecutive_successes, torch.zeros_like(cons_successes), cons_successes)
+    # Update the consecutive successes for environments that did not reset
+    cons_successes = torch.where(resets > 0, torch.zeros_like(consecutive_successes), cons_successes)
     
     return reward, resets, goal_resets, progress_buf, successes, cons_successes
