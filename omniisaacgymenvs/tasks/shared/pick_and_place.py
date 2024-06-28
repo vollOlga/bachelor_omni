@@ -159,7 +159,6 @@ class PickAndPlaceTask(RLTask):
         self._goals.set_world_poses(goal_pos[env_ids], goal_rot[env_ids], indices)
         self.reset_goal_buf[env_ids] = 0
 
-
     def add_place_goal_visualization(self):
         """
         Adds a visualization of the place goal in the scene.
@@ -307,7 +306,7 @@ class PickAndPlaceTask(RLTask):
         rewards, resets, goal_resets, progress, successes, cons_successes = compute_arm_reward(
             self.rew_buf, self.reset_buf, self.reset_goal_buf, self.progress_buf, self.successes,
             self.consecutive_successes, self.max_episode_length, self.object_pos, self.object_rot,
-            self.goal_pos, self.goal_rot, self.dist_reward_scale, self.rot_reward_scale, self.rot_eps,
+            self.place_pos, self.place_rot, self.dist_reward_scale, self.rot_reward_scale, self.rot_eps,
             self.actions, self.action_penalty_scale, self.success_tolerance, self.reach_goal_bonus,
             self.fall_dist, self.fall_penalty, self.max_consecutive_successes, self.av_factor, gripper_pos
         )
@@ -530,7 +529,7 @@ def randomize_rotation(rand0, rand1, x_unit_tensor, y_unit_tensor):
 @torch.jit.script
 def compute_arm_reward(
     rew_buf, reset_buf, reset_goal_buf, progress_buf, successes, consecutive_successes,
-    max_episode_length: float, object_pos, object_rot, target_pos, target_rot,
+    max_episode_length: float, object_pos, object_rot, place_pos, place_rot,
     dist_reward_scale: float, rot_reward_scale: float, rot_eps: float,
     actions, action_penalty_scale: float,
     success_tolerance: float, reach_goal_bonus: float, fall_dist: float,
@@ -549,8 +548,8 @@ def compute_arm_reward(
         max_episode_length (float): Maximum length of an episode.
         object_pos (torch.Tensor): Positions of the objects.
         object_rot (torch.Tensor): Rotations of the objects.
-        target_pos (torch.Tensor): Target positions for the objects.
-        target_rot (torch.Tensor): Target rotations for the objects.
+        place_pos (torch.Tensor): Target positions where the objects should be placed.
+        place_rot (torch.Tensor): Target rotations where the objects should be placed.
         dist_reward_scale (float): Scaling factor for distance reward.
         rot_reward_scale (float): Scaling factor for rotation reward.
         rot_eps (float): Small value to avoid division by zero in rotation calculations.
@@ -569,12 +568,15 @@ def compute_arm_reward(
 
     """
 
-    # Compute the distance between the object and the target, and between the object and the gripper
-    goal_dist = torch.norm(object_pos - target_pos, p=2, dim=-1)
-    gripper_dist = torch.norm(object_pos - gripper_position, p=2, dim=-1)
+    # Compute the distance between the object and the place position
+    place_dist = torch.norm(object_pos - place_pos, p=2, dim=-1)
     
+    # Compute the rotation difference between the object and the place rotation
+    quat_diff = quat_mul(object_rot, quat_conjugate(place_rot))
+    rot_dist = 2.0 * torch.asin(torch.clamp(torch.norm(quat_diff[:, 1:4], p=2, dim=-1), max=1.0))
+
     # Initialize the reward based on these distances
-    reward = -goal_dist * dist_reward_scale
+    reward = -place_dist * dist_reward_scale - rot_dist * rot_reward_scale
     
     # Apply scaling to the distance reward and add penalties for actions taken
     action_penalty = torch.sum(actions ** 2, dim=-1) * action_penalty_scale
@@ -584,12 +586,12 @@ def compute_arm_reward(
     holding = torch.norm(gripper_position - object_pos, p=2, dim=-1) < 0.05  # Threshold distance for holding
     reward = torch.where(holding, reward + 50.0, reward)  # Bonus for picking up the goal object
 
-    # Check if the object is correctly placed at the target and apply a bonus if true
-    correct_placement = goal_dist < success_tolerance
+    # Check if the object is correctly placed at the target position and rotation, and apply a bonus if true
+    correct_placement = (place_dist < success_tolerance) & (rot_dist < rot_eps)
     reward = torch.where(correct_placement, reward + 250.0, reward)  # Bonus for correct placement
 
     # Apply a penalty for the precision of the placement
-    placement_penalty = torch.where(correct_placement, goal_dist * dist_reward_scale, torch.zeros_like(goal_dist))
+    placement_penalty = torch.where(correct_placement, (place_dist + rot_dist) * dist_reward_scale, torch.zeros_like(place_dist))
     reward -= placement_penalty
 
     # Determine if the goal needs resetting based on the success tolerance
