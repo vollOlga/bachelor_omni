@@ -545,105 +545,87 @@ def randomize_rotation(rand0, rand1, x_unit_tensor, y_unit_tensor):
 
 @torch.jit.script
 def compute_arm_reward(
-        rew_buf, reset_buf, reset_goal_buf, progress_buf, successes, consecutive_successes,
-        max_episode_length: float, object_pos, object_rot, goal_pos, goal_rot,
-        dist_reward_scale: float, rot_reward_scale: float, rot_eps: float,
-        actions, action_penalty_scale: float,
-        success_tolerance: float, reach_goal_bonus: float, fall_dist: float,
-        fall_penalty: float, max_consecutive_successes: int, av_factor: float, gripper_position,
-        place_pos):
+    rew_buf, reset_buf, reset_goal_buf, progress_buf, successes, consecutive_successes,
+    max_episode_length: float, object_pos, object_rot, target_pos, target_rot,
+    dist_reward_scale: float, rot_reward_scale: float, rot_eps: float,
+    actions, action_penalty_scale: float,
+    success_tolerance: float, reach_goal_bonus: float, fall_dist: float,
+    fall_penalty: float, max_consecutive_successes: int, av_factor: float, gripper_position
+):
     """
-    Compute the reward for the pick and place task.
+    Compute the reward for the robotic arm in the current simulation step.
 
-    Parameters:
-    - rew_buf: Buffer for storing rewards
-    - reset_buf: Buffer for storing environment reset flags
-    - reset_goal_buf: Buffer for storing goal reset flags
-    - progress_buf: Buffer for tracking progress in the episode
-    - successes: Tensor tracking successes
-    - consecutive_successes: Tensor tracking consecutive successes
-    - max_episode_length: Maximum length of an episode
-    - object_pos: Positions of the objects
-    - object_rot: Rotations of the objects
-    - goal_pos: Positions of the goals
-    - goal_rot: Rotations of the goals
-    - dist_reward_scale: Scaling factor for distance rewards
-    - rot_reward_scale: Scaling factor for rotation rewards
-    - rot_eps: Small epsilon value for numerical stability in rotation calculations
-    - actions: Actions taken by the agent
-    - action_penalty_scale: Scaling factor for action penalties
-    - success_tolerance: Tolerance for considering a task as successful
-    - reach_goal_bonus: Bonus for reaching the goal
-    - fall_dist: Distance threshold for fall penalty
-    - fall_penalty: Penalty for falling
-    - max_consecutive_successes: Maximum number of consecutive successes before reset
-    - av_factor: Averaging factor for computing consecutive successes
-    - gripper_position: Positions of the grippers
-    - place_pos: Positions of the place targets
+    Args:
+        rew_buf (torch.Tensor): Buffer to store the rewards.
+        reset_buf (torch.Tensor): Buffer indicating which environments need a reset.
+        reset_goal_buf (torch.Tensor): Buffer indicating which goals need resetting.
+        progress_buf (torch.Tensor): Buffer tracking the progress of each environment.
+        successes (torch.Tensor): Buffer tracking the number of successes.
+        consecutive_successes (torch.Tensor): Buffer tracking consecutive successes.
+        max_episode_length (float): Maximum length of an episode.
+        object_pos (torch.Tensor): Positions of the objects.
+        object_rot (torch.Tensor): Rotations of the objects.
+        target_pos (torch.Tensor): Target positions for the objects.
+        target_rot (torch.Tensor): Target rotations for the objects.
+        dist_reward_scale (float): Scaling factor for distance reward.
+        rot_reward_scale (float): Scaling factor for rotation reward.
+        rot_eps (float): Small value to avoid division by zero in rotation calculations.
+        actions (torch.Tensor): Actions taken by the robotic arm.
+        action_penalty_scale (float): Scaling factor for action penalty.
+        success_tolerance (float): Distance threshold for considering the task a success.
+        reach_goal_bonus (float): Bonus reward for reaching the goal.
+        fall_dist (float): Distance threshold for considering the object has fallen.
+        fall_penalty (float): Penalty for the object falling.
+        max_consecutive_successes (int): Maximum number of consecutive successes allowed.
+        av_factor (float): Averaging factor for calculating consecutive successes.
+        gripper_position (torch.Tensor): Positions of the gripper.
 
     Returns:
-    - reward: Computed rewards
-    - resets: Flags indicating environments to reset
-    - goal_resets: Flags indicating goals to reset
-    - progress_buf: Updated progress buffer
-    - successes: Updated successes tensor
-    - cons_successes: Updated consecutive successes tensor
-    - gripper_dist: Distance between the gripper and the goal
-    - place_dist: Distance between the object and the place target
+        tuple: A tuple containing updated rewards, resets, goal resets, progress buffer, successes, and consecutive successes.
+
     """
-    # Calculate the Euclidean distance from the gripper to the goal
-    gripper_dist = torch.norm(goal_pos - gripper_position, p=2, dim=-1)
+
+    # Compute the distance between the object and the target, and between the object and the gripper
+    goal_dist = torch.norm(object_pos - target_pos, p=2, dim=-1)
+    gripper_dist = torch.norm(object_pos - gripper_position, p=2, dim=-1)
     
-    # Calculate the Euclidean distance from the object to the place position
-    place_dist = torch.norm(goal_pos - place_pos, p=2, dim=-1)
+    # Initialize the reward based on these distances
+    reward = -goal_dist * dist_reward_scale
     
-    # Calculate the rotational distance between the object's orientation and the goal's orientation
-    quat_diff = quat_mul(object_rot, quat_conjugate(goal_rot))
-    rot_dist = 2.0 * torch.asin(torch.clamp(torch.norm(quat_diff[:, 1:4], p=2, dim=-1), max=1.0))  # Compute angular difference
-    
-    # Calculate distance and rotation rewards
-    gripper_rew = gripper_dist * dist_reward_scale
-    dist_rew = place_dist * dist_reward_scale
-    rot_rew = 1.0 / (torch.abs(rot_dist) + rot_eps) * rot_reward_scale
-    
-    # Sum the distance and rotation rewards
-    reward = gripper_rew + dist_rew + rot_rew
-    
-    # Apply action penalty
+    # Apply scaling to the distance reward and add penalties for actions taken
     action_penalty = torch.sum(actions ** 2, dim=-1) * action_penalty_scale
     reward -= action_penalty
-    
-    # Check if the gripper is holding the goal object and add a reward if true
-    holding = torch.norm(gripper_position - goal_pos, p=2, dim=-1) < 0.05
-    reward += holding * 50.0
-    
-    # Check if the object is correctly placed and add a reward if true
-    correct_placement = torch.norm(object_pos - place_pos, p=2, dim=-1) < success_tolerance
-    reward += correct_placement * 250.0
-    
-    # Apply a penalty for the correct placement based on the distance between the goal and the place position
-    placement_penalty = correct_placement * torch.norm(goal_pos - place_pos, p=2, dim=-1)
+
+    # Check if the gripper is holding the object and apply a bonus if true
+    holding = torch.norm(gripper_position - object_pos, p=2, dim=-1) < 0.05  # Threshold distance for holding
+    reward = torch.where(holding, reward + 50.0, reward)  # Bonus for picking up the goal object
+
+    # Check if the object is correctly placed at the target and apply a bonus if true
+    correct_placement = goal_dist < success_tolerance
+    reward = torch.where(correct_placement, reward + 250.0, reward)  # Bonus for correct placement
+
+    # Apply a penalty for the precision of the placement
+    placement_penalty = torch.where(correct_placement, goal_dist * dist_reward_scale, torch.zeros_like(goal_dist))
     reward -= placement_penalty
-    
-    # Determine if a goal reset is required based on correct placement
+
+    # Determine if the goal needs resetting based on the success tolerance
     goal_resets = torch.where(correct_placement, torch.ones_like(reset_goal_buf), reset_goal_buf)
     successes = successes + goal_resets
     reward = torch.where(goal_resets == 1, reward + reach_goal_bonus, reward)
     
-    # Determine if an environment reset is required based on correct placement or maximum episode length
+    # Handle resets based on episode length and correct placement
     resets = torch.where(correct_placement | (progress_buf >= max_episode_length), torch.ones_like(reset_buf), reset_buf)
     
-    # Calculate the number of resets
+    # Calculate the number of resets and update the consecutive successes
     num_resets = torch.sum(resets)
-    
-    # Calculate the number of finished consecutive successes
     finished_cons_successes = torch.sum(successes * resets.float())
-    
-    # Update the consecutive successes with an averaging factor
     cons_successes = torch.where(
-        num_resets > 0,
-        av_factor * finished_cons_successes / num_resets + (1.0 - av_factor) * consecutive_successes,
+        num_resets > 0, 
+        av_factor * finished_cons_successes / num_resets + (1.0 - av_factor) * consecutive_successes, 
         consecutive_successes
     )
+
+    # Reset consecutive successes if the maximum allowed is reached
+    cons_successes = torch.where(cons_successes >= max_consecutive_successes, torch.zeros_like(cons_successes), cons_successes)
     
-    return reward, resets, goal_resets, progress_buf, successes, cons_successes, gripper_dist, place_dist
+    return reward, resets, goal_resets, progress_buf, successes, cons_successes
